@@ -13,7 +13,7 @@
 
 
 
-<a href="https://t.me/Lime_TW" style="text-decoration: none; display: inline-flex; align-items: center; gap: 8px; color: #2AABEE;">
+<a href="https://t.me/Lime_TW" target="_blank" rel="noopener noreferrer" style="text-decoration: none; display: inline-flex; align-items: center; gap: 8px; color: #2AABEE;">
   <img src="https://cdn-icons-png.flaticon.com/512/2111/2111646.png" alt="Telegram" style="width: 20px; height: 20px;">
   <span style="font-family: sans-serif;">@Lime_TW</span>
 </a>
