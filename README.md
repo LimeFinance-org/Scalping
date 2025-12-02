@@ -7,3 +7,13 @@
 - हिन्दी: बिनांस पर त्वरित स्कैल्पिंग ट्रेडिंग के लिए समर्पित एक प्रोग्राम, जो क्रिप्टोकरेंसी बाजारों के लिए लघु अवधि की ट्रेडिंग रणनीतियों पर केंद्रित है।
 - 中文: 專注於幣安快速短線交易的程式，聚焦加密貨幣市場的短期交易策略。
 - Kiswahili: Programu inayotegemea biashara ya scalping haraka kwenye Binance, yenye makosa kwenye mipango ya biashara ya muda mfupi kwa soko la cryptocurrency.
+
+
+
+
+
+
+<a href="https://t.me/Lime_TW" style="text-decoration: none; display: inline-flex; align-items: center; gap: 8px; color: #2AABEE;">
+  <img src="https://cdn-icons-png.flaticon.com/512/2111/2111646.png" alt="Telegram" style="width: 20px; height: 20px;">
+  <span style="font-family: sans-serif;">@Lime_TW</span>
+</a>
