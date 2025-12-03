@@ -17,7 +17,7 @@ import argparse
 API_URL = "https://fapi.binance.com"
 RECV_WINDOW = 60000
 
-ORDER_NOTIONAL = float(os.getenv("ORDER_NOTIONAL", "6"))
+ORDER_NOTIONAL = float(os.getenv("ORDER_NOTIONAL", "10"))
 ORDER_STOP_NOTIONAL = ORDER_NOTIONAL * 0.5
 MAX_OPEN_MARGIN_RATIO = float(os.getenv("MAX_OPEN_MARGIN_RATIO", "15"))
 
@@ -251,34 +251,44 @@ def symbol_filter_loop():
             pass
         time.sleep(600)
 
-def get_series_stats() -> tuple[int, int]:
+def get_min_series_len() -> tuple[int, int]:
     with lock:
-        if not selected_symbols:
+        if not fast_symbols:
             return 0, 0
-        mx = 0
+        mi = 999999
         n = 0
-        for sym in selected_symbols:
+        for sym in fast_symbols:
             dq = prices.get(sym)
-            mx = max(mx, len(dq) if dq else 0)
+            if dq is None:
+                mi = min(mi, 0)
+            else:
+                mi = min(mi, len(dq))
             n += 1
-        return mx, n
+        if mi == 999999:
+            mi = 0
+        return mi, n
 
 def countdown_loop():
     global countdown_done
     global countdown_start
     next_tick = time.perf_counter()
     while True:
-        mx, n = get_series_stats()
+        mi, n = get_min_series_len()
         if not printed_data_acc:
             print("\n========== 数据积累 ==========")
             globals()['printed_data_acc'] = True
-        if mx >= 600:
+        if mi >= 600:
             if not countdown_done:
                 print("\nK线数据已就绪，开始监控交易信号...")
                 print("\n========== 交易执行 ==========")
                 countdown_done = True
                 globals()['printed_ready'] = True
             break
+        mx = 0
+        with lock:
+            for sym in selected_symbols:
+                dq = prices.get(sym)
+                mx = max(mx, len(dq) if dq else 0)
         rem = max(0, 600 - mx)
         print(f"等待K线数据积累... 当前最大: {mx}/600  剩余: {rem}秒")
         next_tick += 1.0
@@ -395,7 +405,7 @@ def get_account_info():
     return j if isinstance(j, dict) else {}
 
 def get_positions():
-    arr = api_get("/fapi/v3/positionRisk", signed=True, api_key=g_api_key, secret=g_secret)
+    arr = api_get("/fapi/v2/positionRisk", signed=True, api_key=g_api_key, secret=g_secret)
     return arr if isinstance(arr, list) else []
 
 def current_margin_ratio() -> float:
@@ -531,9 +541,7 @@ def ticker_loop():
             if isinstance(j, list):
                 for it in j:
                     sym = it.get("symbol")
-                    with lock:
-                        is_selected = sym in selected_symbols
-                    if is_selected:
+                    if sym in fast_symbols:
                         try:
                             p = float(it.get("price", 0) or 0)
                         except Exception:
@@ -548,8 +556,7 @@ def ticker_loop():
                         prices[sym] = dq
                     dq.append({"t": now, "p": price})
             with lock:
-                syms = list(selected_symbols)
-            for sym in syms:
+                for sym in list(fast_symbols):
                     dq = prices.get(sym, deque())
                     if len(dq) < 600:
                         continue
@@ -639,20 +646,19 @@ def ticker_loop():
         time.sleep(1)
 
 def minute_eval_loop():
-    import concurrent.futures
     while True:
         try:
             now = now_ms()
-            target = ((now // 60000) * 60000) + 57_000
+            target = ((now // 60000) * 60000) + 58_000
             if now > target:
                 target += 60_000
             time.sleep(max(0.0, (target - now) / 1000.0))
             with lock:
-                syms = list(selected_symbols)
-            def process_symbol(sym: str):
+                syms = [s for s in selected_symbols if s not in fast_symbols]
+            for sym in syms:
                 kl = api_get("/fapi/v1/klines", {"symbol": sym, "interval": "1m", "limit": 1000})
                 if not isinstance(kl, list) or len(kl) < 600:
-                    return None
+                    continue
                 closes = [float(it[4]) for it in kl]
                 highs = [float(it[2]) for it in kl]
                 lows = [float(it[3]) for it in kl]
@@ -737,9 +743,6 @@ def minute_eval_loop():
                         try_open(sym, cp, side_dir, label)
                     except Exception as e:
                         print(f"下单失败: {sym} {side_dir} {e}")
-                return True
-            with concurrent.futures.ThreadPoolExecutor(max_workers=12) as ex:
-                list(ex.map(process_symbol, syms))
         except Exception:
             time.sleep(0.5)
 
@@ -773,8 +776,9 @@ def try_open(sym: str, price: float, side_dir: str, label: str):
             has_same = True
     for it in pos:
         try:
-            notional = float(str(it.get("notional", "0")) or 0)
-            total_nominal += abs(notional)
+            amt = float(str(it.get("positionAmt", "0")) or 0)
+            mark = float(str(it.get("markPrice", "0")) or 0)
+            total_nominal += abs(amt) * mark
         except Exception:
             continue
     if has_same:
@@ -833,17 +837,19 @@ def risk_loop():
                     side = str(it.get("positionSide", "")).upper()
                     amt = float(str(it.get("positionAmt", "0")) or 0)
                     entry = float(str(it.get("entryPrice", "0")) or 0)
+                    cur = float(prices_map.get(sym, entry) or entry)
                     if abs(amt) <= 1e-12:
                         continue
-                    unreal = float(str(it.get("unRealizedProfit", "0")) or 0)
-                    notional_val = float(str(it.get("notional", "0")) or 0)
-                    loss = max(0.0, -unreal)
-                    pnl_pct = (unreal / abs(notional_val) * 100.0) if abs(notional_val) > 1e-12 else 0.0
-                    if loss >= ORDER_STOP_NOTIONAL:
+                    notional_loss = 0.0
+                    if side == "LONG":
+                        notional_loss = max(0.0, (entry - cur) * abs(amt))
+                    else:
+                        notional_loss = max(0.0, (cur - entry) * abs(amt))
+                    if notional_loss >= ORDER_STOP_NOTIONAL:
                         q = adjust_qty(sym, abs(amt))
                         sd = "SELL" if side == "LONG" else "BUY"
                         j = place_market(sym, sd, side, q)
-                        print(f"{fmt_time()}   {sym}   {side}  紧急止损平仓  未实现盈亏 {float(f'{unreal:.4f}')} ({float(f'{pnl_pct:.2f}')}%)")
+                        print(f"{fmt_time()}   {sym}   {side}  紧急止损平仓")
                         continue
                     closes = None
                     dq = prices.get(sym)
