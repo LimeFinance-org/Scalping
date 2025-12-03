@@ -651,7 +651,7 @@ def second_eval_loop():
                 if signal is None and cond_short1 and pass_macd_once("SHORT_DIF_LT_DEA"):
                     vols = klines_1m_quote_vol(sym, 1000)
                     if len(vols) >= 2:
-                        if vols[-1] <= 0.5 * vols[-2] and (sum(vols[-20:]) / 20.0) < (sum(vols[-500:]) / 500.0):
+                        if vols[-1] >= 2 * vols[-2] and (sum(vols[-20:]) / 20.0) < (sum(vols[-500:]) / 500.0):
                             signal = ("SHORT", "做空1")
                 if signal is None and cond_short2 and pass_macd_once("SHORT_DIF_LT_DEA"):
                     vols = klines_1m_quote_vol(sym, 1000)
@@ -760,7 +760,7 @@ def minute_eval_loop():
                 if signal is None and cond_short1 and pass_macd_once("SHORT_DIF_LT_DEA"):
                     vols = klines_1m_quote_vol(sym, 1000)
                     if len(vols) >= 2:
-                        if vols[-1] <= 0.5 * vols[-2] and (sum(vols[-20:]) / 20.0) < (sum(vols[-500:]) / 500.0):
+                        if vols[-1] >= 2 * vols[-2] and (sum(vols[-20:]) / 20.0) < (sum(vols[-500:]) / 500.0):
                             signal = ("SHORT", "做空1")
                 if signal is None and cond_short2 and pass_macd_once("SHORT_DIF_LT_DEA"):
                     vols = klines_1m_quote_vol(sym, 1000)

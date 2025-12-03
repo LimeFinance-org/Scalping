@@ -70,7 +70,7 @@ def fetch_balances(api_key: str, secret: str, asset: str) -> tuple[float, float]
 
 app = Flask(__name__)
 
-series = deque(maxlen=21600)
+series = deque()
 latest = {"t": None, "wallet": None, "margin": None}
 g_api_key = None
 g_secret = None
@@ -515,7 +515,8 @@ def main():
                         continue
         if loaded:
             with lock:
-                for obj in loaded[-series.maxlen:]:
+                to_load = loaded if series.maxlen is None else loaded[-series.maxlen:]
+                for obj in to_load:
                     if isinstance(obj, dict) and ("t" in obj) and ("wallet" in obj) and ("margin" in obj):
                         try:
                             tt = int(obj.get("t"))
