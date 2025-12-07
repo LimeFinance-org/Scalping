@@ -979,6 +979,10 @@ def risk_loop():
                             cancel_open_orders_for_side(sym, "SHORT")
                         except Exception:
                             pass
+                        try:
+                            last_macd_dir.pop(sym, None)
+                        except Exception:
+                            pass
                         pair_closed_syms.add(sym)
             for it in pos:
                 try:
@@ -1017,6 +1021,10 @@ def risk_loop():
                                 sd = "SELL" if side == "LONG" else "BUY"
                                 place_market(sym, sd, side, q)
                                 print(f"{fmt_time()}   {sym}   {side}  盈利停滞平仓  波动 {float(f'{(mxp-mnp):.4f}')}%  年龄 {float(f'{age_sec:.0f}')}s")
+                                try:
+                                    last_macd_dir.pop(sym, None)
+                                except Exception:
+                                    pass
                                 continue
                     if loss >= ORDER_STOP_NOTIONAL:
                         q = adjust_qty(sym, abs(amt))
@@ -1026,6 +1034,10 @@ def risk_loop():
                         try:
                             if abs(q) > 0:
                                 cancel_open_orders_if_flat(sym, side)
+                        except Exception:
+                            pass
+                        try:
+                            last_macd_dir.pop(sym, None)
                         except Exception:
                             pass
                         continue
@@ -1058,6 +1070,10 @@ def risk_loop():
                         try:
                             if abs(q) > 0:
                                 cancel_open_orders_if_flat(sym, side)
+                        except Exception:
+                            pass
+                        try:
+                            last_macd_dir.pop(sym, None)
                         except Exception:
                             pass
                 except Exception:
