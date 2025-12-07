@@ -1,6 +1,3 @@
-# 每单下单金额（默认名义价值为6元，也就是保证金0.3元）
-# 每单止损：每单下单金额*0.5 (例如默认名义价值下单6元，则止损为3元)
-# 开仓最大账户保证金率：默认为15%（接口：/fapi/v3/account 计算方式=totalMaintMargin ÷ totalMarginBalance × 100）
 import os
 import json
 import time
@@ -17,9 +14,9 @@ import argparse
 API_URL = "https://fapi.binance.com"
 RECV_WINDOW = 60000
 
-ORDER_NOTIONAL = float(os.getenv("ORDER_NOTIONAL", "6"))
-ORDER_STOP_NOTIONAL = ORDER_NOTIONAL * 0.5
-MAX_OPEN_MARGIN_RATIO = float(os.getenv("MAX_OPEN_MARGIN_RATIO", "15"))
+ORDER_NOTIONAL = float(os.getenv("ORDER_NOTIONAL", "6"))# 每单下单金额（默认名义价值为6元，也就是保证金0.3元）
+ORDER_STOP_NOTIONAL = ORDER_NOTIONAL * 0.5 # 每单止损：每单下单金额*0.5 (例如默认名义价值下单6元，则止损为3元)
+MAX_OPEN_MARGIN_RATIO = float(os.getenv("MAX_OPEN_MARGIN_RATIO", "15"))# 开仓最大账户保证金率：默认为15%（接口：/fapi/v3/account 计算方式=totalMaintMargin ÷ totalMarginBalance × 100）
 
 time_offset_ms = 0
 
@@ -67,6 +64,21 @@ def api_post(path: str, params: dict | None = None, signed: bool = False, api_ke
     r = requests.post(f"{API_URL}{path}", params=params, headers=headers, timeout=timeout)
     return r.json()
 
+def api_delete(path: str, params: dict | None = None, signed: bool = False, api_key: str | None = None, secret: str | None = None, timeout: float = 10.0):
+    params = dict(params or {})
+    headers = {}
+    if signed:
+        ts = now_ms()
+        params.update({"timestamp": ts, "recvWindow": RECV_WINDOW})
+        sig = _sign(params, secret or "")
+        params["signature"] = sig
+        headers["X-MBX-APIKEY"] = api_key or ""
+    else:
+        if api_key:
+            headers["X-MBX-APIKEY"] = api_key
+    r = requests.delete(f"{API_URL}{path}", params=params, headers=headers, timeout=timeout)
+    return r.json()
+
 def sync_time():
     global time_offset_ms
     try:
@@ -84,7 +96,6 @@ symbol_filters: dict[str, dict] = {}
 prices: dict[str, deque] = {}
 last_macd_dir: dict[str, str] = {}
 last_attempt_at: dict[tuple[str, str], float] = {}
-fast_symbols = set()
 printed_start = False
 printed_data_acc = False
 printed_ready = False
@@ -229,20 +240,6 @@ def filter_symbols_once():
             symbol_filters[sym] = flt
             if sym not in prices:
                 prices[sym] = deque(maxlen=1500)
-        # 选取涨幅榜前10作为秒级处理的交易对
-        gain_map = {}
-        if isinstance(arr, list):
-            for it in arr:
-                sym = it.get("symbol")
-                try:
-                    pct = float(it.get("priceChangePercent", 0) or 0)
-                except Exception:
-                    pct = 0.0
-                gain_map[sym] = pct
-        top10 = sorted([sym for sym in selected_symbols], key=lambda s: gain_map.get(s, 0.0), reverse=True)[:10]
-        fast_symbols.clear()
-        for s in top10:
-            fast_symbols.add(s)
     print(f"✓ 符合条件的交易对数量: {len(selected_symbols)}")
 
 def symbol_filter_loop():
@@ -512,6 +509,62 @@ def place_tp_limit_or_market(sym: str, position_side: str, entry: float, qty: fl
         }
     j = api_post("/fapi/v1/order", p, signed=True, api_key=g_api_key, secret=g_secret)
     return j
+
+def list_open_orders(sym: str) -> list[dict]:
+    j = api_get("/fapi/v1/openOrders", {"symbol": sym}, signed=True, api_key=g_api_key, secret=g_secret)
+    return j if isinstance(j, list) else []
+
+def cancel_orders(sym: str, order_ids: list[int] | list[str]) -> dict:
+    if not order_ids:
+        return {"ok": True}
+    payload = {"symbol": sym}
+    if all(isinstance(x, int) for x in order_ids):
+        payload["orderIdList"] = json.dumps(order_ids)
+    else:
+        payload["origClientOrderIdList"] = json.dumps(order_ids)
+    return api_delete("/fapi/v1/batchOrders", payload, signed=True, api_key=g_api_key, secret=g_secret)
+
+def cancel_open_orders_for_side(sym: str, position_side: str):
+    arr = list_open_orders(sym)
+    ids = []
+    for it in arr:
+        try:
+            if str(it.get("positionSide", "")).upper() != str(position_side).upper():
+                continue
+            st = str(it.get("status", "")).upper()
+            if st not in ("NEW", "PARTIALLY_FILLED"):
+                continue
+            ot = str(it.get("type", "")).upper()
+            if ot in ("TRAILING_STOP_MARKET", "TAKE_PROFIT", "TAKE_PROFIT_MARKET"):
+                oid = it.get("orderId")
+                if oid is None:
+                    ocid = it.get("clientOrderId")
+                    if ocid:
+                        ids.append(str(ocid))
+                else:
+                    ids.append(int(oid))
+        except Exception:
+            continue
+    if ids:
+        cancel_orders(sym, ids)
+
+def cancel_open_orders_if_flat(sym: str, position_side: str):
+    arr = get_positions()
+    flat = True
+    for it in arr:
+        if it.get("symbol") != sym:
+            continue
+        if str(it.get("positionSide", "")).upper() != str(position_side).upper():
+            continue
+        try:
+            amt = float(str(it.get("positionAmt", "0")) or 0)
+        except Exception:
+            amt = 0.0
+        if abs(amt) > 1e-12:
+            flat = False
+            break
+    if flat:
+        cancel_open_orders_for_side(sym, position_side)
 
 def latest_ohlc_1m(sym: str):
     arr = api_get("/fapi/v1/klines", {"symbol": sym, "interval": "1m", "limit": 1})
@@ -921,6 +974,11 @@ def risk_loop():
                         if qs > 0:
                             place_market(sym, "BUY", "SHORT", qs)
                         print(f"{fmt_time()}   {sym}   LONG/SHORT  对冲同时平仓  净盈亏 {float(f'{net:.4f}')}  基准名义 {float(f'{base:.4f}')}  阈值 2%")
+                        try:
+                            cancel_open_orders_for_side(sym, "LONG")
+                            cancel_open_orders_for_side(sym, "SHORT")
+                        except Exception:
+                            pass
                         pair_closed_syms.add(sym)
             for it in pos:
                 try:
@@ -965,6 +1023,11 @@ def risk_loop():
                         sd = "SELL" if side == "LONG" else "BUY"
                         j = place_market(sym, sd, side, q)
                         print(f"{fmt_time()}   {sym}   {side}  紧急止损平仓  未实现盈亏 {float(f'{unreal:.4f}')} ({float(f'{pnl_pct:.2f}')}%)")
+                        try:
+                            if abs(q) > 0:
+                                cancel_open_orders_if_flat(sym, side)
+                        except Exception:
+                            pass
                         continue
                     closes = None
                     dq = prices.get(sym)
@@ -988,15 +1051,20 @@ def risk_loop():
                         if (cp > ema500[idx]):
                             trigger = True
                             sd = "BUY"
-                        if trigger:
-                            q = adjust_qty(sym, abs(amt))
-                            j = place_market(sym, sd, side, q)
-                            print(f"{fmt_time()}   {sym}   {side}  策略平仓")
+                    if trigger:
+                        q = adjust_qty(sym, abs(amt))
+                        j = place_market(sym, sd, side, q)
+                        print(f"{fmt_time()}   {sym}   {side}  策略平仓")
+                        try:
+                            if abs(q) > 0:
+                                cancel_open_orders_if_flat(sym, side)
+                        except Exception:
+                            pass
                 except Exception:
                     continue
         except Exception:
             pass
-        time.sleep(2)
+        time.sleep(1)
 
 def setup_once():
     print("========== 启动 ==========")
